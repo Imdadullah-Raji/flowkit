@@ -31,6 +31,8 @@ def read_foamcase(casepath:str, patch= 'airfoil'):
     ds.attrs['source_case']= casepath
     
     return ds
+
+
 def foam_to_netcdf(casepath, outpath, patch= 'airfoil'):
     ds = read_foamcase(casepath=casepath, patch=patch)
     ds.to_netcdf(outpath)

@@ -6,6 +6,8 @@ from src.io import read_foamcase, body_length_scale
 
 class InvalidSnapshotFormat(Exception):
     pass
+class NotAssociatedWithDataset(Exception):
+    pass
 
 class CFDdataset:
     
@@ -14,6 +16,7 @@ class CFDdataset:
         self._data = data
         self._tri = None
         self.length_scale = length_scale
+        
     @property
     def data(self):
         return self._data
@@ -33,9 +36,11 @@ class CFDdataset:
         data = read_foamcase(casepath, patch=patch)                       # pure I/O
         L = body_length_scale(casepath, patch=patch)      # computed once, at load time
         return cls(data, length_scale=L)
+    
     @classmethod
     def from_dataset(cls, dataset:xr.Dataset):
         return cls(dataset, dataset.attrs.get('length_scale'))
+    
     @classmethod
     def from_netcdf(cls, source):
         ds = xr.open_dataset(source)
@@ -64,12 +69,14 @@ class CFDdataset:
 
 class Snapshot:
 
-    def __init__(self, x, y, p, u, v):
+    def __init__(self, x, y, p, u, v, dataset= None, index= None):
         self._x = x
         self._y = y
         self._p = p 
         self._u = u
         self._v = v
+        self._dataset = dataset
+        self._index= index
 
         self._xmin = np.min(x)
         self._ymin = np.min(y)
@@ -100,7 +107,29 @@ class Snapshot:
         u = f['U'].values[:,0]
         v = f['U'].values[:,1]
 
-        return cls(x,y,p,u,v)
+        idx = dataset.indexes["time"].get_loc(time)
+
+        return cls(x,y,p,u,v, dataset = dataset, index =idx )
+    
+    # TODO Need to handle index out of bound cases
+
+    def next(self):
+        if self._index is None:
+            raise NotAssociatedWithDataset(
+                "Snapshot is not linked to any dataset"
+            )
+        idx = self._index+1
+        time = self._dataset.time[idx].item()
+        return Snapshot.from_dataset(time, self._dataset)
+    def previous(self):
+        if self._index is None:
+            raise NotAssociatedWithDataset(
+                "Snapshot is not linked to any dataset"
+            )
+        idx = self._index -1
+        time = self._dataset.time[idx].item()
+        return Snapshot.from_dataset(time, self._dataset)
+
 
     @property
     def x(self):
