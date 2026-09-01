@@ -7,8 +7,7 @@ advecting particles through the resulting velocity field (the groundwork for
 FTLE / LCS computation).
 
 > **Status: early research code.** The API is unstable, there are no tests, and
-> several documented rough edges are listed in `ISSUES.md`. Read that file
-> before relying on any result.
+> several rough edges is present. 
 
 ---
 
@@ -29,9 +28,6 @@ pip install -e .            # core
 pip install -e ".[viz]"     # + matplotlib for scripts/
 ```
 
-The importable package is currently named `src` (see `ISSUES.md`, issue 1), so
-all imports look like `from src.io import ...`. Everything also works without
-installing, as long as you run from the repository root.
 
 ---
 

@@ -32,9 +32,7 @@ dev = [
 ]
 
 [tool.setuptools]
-# NOTE: the importable package is literally named `src` because every import in
-# the project is `from src.io import ...`. See ISSUES.md issue 1 -- rename this
-# to `flowkit` and the directory with it once the API settles.
+
 packages = ["src"]
 
 [tool.ruff]
