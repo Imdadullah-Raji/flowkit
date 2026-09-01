@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flowkit"
+version = "0.1.0"
+description = "Post-processing and Lagrangian analysis of 2-D OpenFOAM simulations"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Imdadullah Raji", email = "sheikhraji314@gmail.com" }]
+keywords = ["cfd", "openfoam", "lagrangian", "ftle", "lcs", "fluid-dynamics"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "numpy>=1.21",
+    "scipy>=1.8",
+    "xarray>=2023.1",
+    "netCDF4>=1.6",
+    "fluidfoam>=0.2",
+]
+
+[project.optional-dependencies]
+viz = ["matplotlib>=3.5"]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.5",
+]
+
+[tool.setuptools]
+# NOTE: the importable package is literally named `src` because every import in
+# the project is `from src.io import ...`. See ISSUES.md issue 1 -- rename this
+# to `flowkit` and the directory with it once the API settles.
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
