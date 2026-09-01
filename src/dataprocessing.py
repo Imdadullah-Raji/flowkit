@@ -9,8 +9,7 @@ class InvalidSnapshotFormat(Exception):
 class NotAssociatedWithDataset(Exception):
     pass
 
-class CFDdataset:
-    
+class Dataset:   
     
     def __init__(self, data: xr.Dataset, length_scale: float = None):
         self._data = data
@@ -22,12 +21,12 @@ class CFDdataset:
         return self._data
     @property
     def times(self):
-        return self._data['times'].values
+        return self._data['time'].values
 
     def snapshot(self, time):
         return Snapshot.from_dataset(time, self._data)
     def snapshots(self, times= None):
-        times = self.times if times in None else times 
+        times = self.time if times is None else times 
         for t in times:
             yield  self.snapshot(t)
 
@@ -47,17 +46,17 @@ class CFDdataset:
         len_scale= ds.attrs.get('length_scale')
         return(cls(ds, len_scale))
 
-    def crop(self, xmin=None, xmax=None, ymin=None, ymax=None) -> "CFDdataset":
+    def crop(self, xmin=None, xmax=None, ymin=None, ymax=None) -> "Dataset":
         x = self._data['x'].values
         y = self._data['y'].values
         mask = _bounds_mask(x, y, xmin, xmax, ymin, ymax)
-        return CFDdataset(self._data.isel(cell=mask), length_scale=self.length_scale)
+        return Dataset(self._data.isel(cell=mask), length_scale=self.length_scale)
 
-    def crop_relative(self, xmin, xmax, ymin, ymax, length_scale=None, origin=(0, 0)):
+    def crop_relative(self, xmin, xmax, ymin, ymax, length_scale=None, origin=(0, 0)) -> "Dataset":
         L = length_scale if length_scale is not None else self.length_scale
         if L is None:
             raise ValueError(
-                "No length_scale given and none stored on this CFDdataset "
+                "No length_scale given and none stored on this Dataset "
                 "(construct via from_foam, or pass length_scale= explicitly)."
             )
         x0, y0 = origin
@@ -65,7 +64,6 @@ class CFDdataset:
             xmin=x0 + xmin * L, xmax=x0 + xmax * L,
             ymin=y0 + ymin * L, ymax=y0 + ymax * L,
         )
-    
 
 class Snapshot:
 
@@ -174,10 +172,10 @@ class Snapshot:
         
     def mask(self, xmin=None, xmax=None, ymin=None, ymax=None):
         valid = (
-            (self._x>xmin) & 
-            (self._x<xmax) & 
-            (self._y>ymin) & 
-            (self._y<ymax)
+            (self._x>=xmin) & 
+            (self._x<=xmax) & 
+            (self._y>=ymin) & 
+            (self._y<=ymax)
         )
         #add None logic later 
         return valid

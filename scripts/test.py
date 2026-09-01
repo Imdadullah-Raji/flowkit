@@ -1,5 +1,5 @@
 from src.io import foam_to_netcdf
-from src.dataprocessing import CFDdataset
+from src.dataprocessing import Dataset
 import matplotlib.pyplot as plt
 
 casepath = '/home/raji/OpenFOAM/raji-dev/run/sq_new'
@@ -8,7 +8,7 @@ figsavepath = '/home/raji/Research/analyze_cfd/figures/'
 
 #out = foam_to_netcdf(casepath=casepath, outpath= outpath, patch='square')
 
-dataset = CFDdataset.from_netcdf(outpath)
+dataset = Dataset.from_netcdf(outpath)
 snapshot = dataset.snapshot(20)
 
 # print("Length Scale:", dataset.length_scale)
