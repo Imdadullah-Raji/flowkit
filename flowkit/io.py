@@ -37,7 +37,7 @@ def read_foamcase(casepath:str, patch= 'airfoil'):
             data[f].append(a.T if a.ndim > 1 else a)   # (3,n)
     coords = {"time": [t for t, _ in times], "x": ("cell", x), "y": ("cell", y)}
     # Cell volumes are optional -- only POD needs them -- so a case without them
-    # still converts. src.pod raises a pointed error if they turn out to be missing.
+    # still converts. flowkit.pod raises a pointed error if they turn out to be missing.
     try:
         coords["V"] = ("cell", read_cell_volumes(casepath))
     except FileNotFoundError as e:

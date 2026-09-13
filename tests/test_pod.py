@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from src.pod import pod, MissingCellVolumes
+from flowkit.pod import pod, MissingCellVolumes
 
 
 def synthetic(n_cells=500, n_times=200, seed=0):

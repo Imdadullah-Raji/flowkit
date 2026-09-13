@@ -1,3 +1,26 @@
+Metadata-Version: 2.4
+Name: flowkit
+Version: 0.1.0
+Summary: Post-processing and Lagrangian analysis of 2-D OpenFOAM simulations
+Author-email: Imdadullah Raji <sheikhraji314@gmail.com>
+Keywords: cfd,openfoam,lagrangian,ftle,lcs,fluid-dynamics
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Science/Research
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Scientific/Engineering :: Physics
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.21
+Requires-Dist: scipy>=1.8
+Requires-Dist: xarray>=2023.1
+Requires-Dist: netCDF4>=1.6
+Requires-Dist: fluidfoam>=0.2
+Provides-Extra: viz
+Requires-Dist: matplotlib>=3.5; extra == "viz"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: ruff>=0.5; extra == "dev"
+
 # flowkit
 
 A small research library for post-processing 2-D OpenFOAM simulations and doing
@@ -39,9 +62,7 @@ The library is three layers, each in its own module:
 |---|---|---|---|
 | I/O | `flowkit.io` | functions | OpenFOAM case → `xarray.Dataset` → NetCDF |
 | Fields | `flowkit.dataprocessing` | `Dataset`, `Snapshot`, `CartesianSnapshot` | the whole time series, one instant, one instant on a regular grid |
-| Particles | `flowkit.lagrangian` | `Particles`, `FlowField`, `advect` | tracers advected through a time-interpolated field |
-| LCS | `flowkit.ftle` | `ftle()`, `FTLEResult` | finite-time Lyapunov exponent and its ridges |
-| Cases | `flowkit.cases` | `case()` | where each simulation lives |
+| Particles | `flowkit.lagrangian` | `Particles` | positions advected through a `CartesianSnapshot` |
 | Modal | `flowkit.pod` | `pod()`, `PODResult` | volume-weighted POD of the velocity fluctuations |
 
 ```
@@ -51,7 +72,7 @@ OpenFOAM case ──read_foamcase──> xr.Dataset ──Dataset.from_*──> 
                                      ↓                            ↓
                                   file.nc                     Snapshot  (scattered cell data)
                                                                   │
-                                                    .interpolate_on_grid()
+                                                    .interpolateOnCartesianGrid()
                                                                   ↓
                                                           CartesianSnapshot  (regular grid + interpolators)
                                                                   │
@@ -148,46 +169,41 @@ Particle advection needs a field that can be evaluated at arbitrary points, so
 the scattered cell data is first resampled onto a regular grid:
 
 ```python
-field = sub.interpolate_on_grid(element_size=0.01)
+field = sub.interpolateOnCartesianGrid(element_size=0.01)
 
 field.x, field.y            # 1-D grid axes
 field.u, field.v, field.p   # 2-D arrays, shape (len(y), len(x))
-field.element_size           # grid spacing
+field.elementSize           # grid spacing
 
 u, v, p = field.sample(0.3, 0.15)          # scalars
 u, v, p = field.sample(xq_array, yq_array) # broadcast, NaN outside the grid
 ```
 
-Points outside the grid return `NaN` rather than raising. The default `element_size` is `sqrt(area / n_points)`, a sane 2-D estimate; pass
-your own when you want a specific resolution.
+Points outside the grid return `NaN` rather than raising. **Always pass
+`element_size` explicitly** — the automatic default is a poor estimate and can
+produce an enormous grid (`ISSUES.md`, issue 6).
 
 ### 5. Advect particles
 
 ```python
 import numpy as np
-from flowkit import FlowField, Particles, advect
+from flowkit.lagrangian import Particles
 
-seeds, shape = Particles.on_grid(np.arange(-0.5, 4.0, 0.02),
-                                 np.arange(-1.0, 1.0, 0.02))
-final = advect(wake, seeds, t0=162.2, T=4.0, dt=0.02, element_size=0.02)
+X, Y = np.meshgrid(np.arange(-0.5, 4.0, 0.02),
+                   np.arange(-1.0, 1.0, 0.02))
+p = Particles(X.ravel(), Y.ravel())
 
-fx = final.posx.reshape(shape)        # always valid -- see below
-print(final)                          # <Particles 10000 total, 7834 active>
+p = p.step(field, dt=0.01, method="Euler")   # returns a NEW Particles
+print(p.n_particles, p.posx, p.posy)
 ```
 
-**The particle array never changes length.** A particle that leaves the domain
-becomes `NaN` and stays `NaN`; it is not deleted. That is what keeps
-`posx.reshape(shape)` valid for the whole integration, and a flow map is exactly
-that correspondence between a particle's index and its seeding position.
+`step` samples the velocity at each particle position, takes one explicit Euler
+step, and drops any particle that left the field (its sample was `NaN`). Euler
+is the only method implemented. `Particles` is immutable-by-convention: each
+step returns a new object.
 
-`advect` accepts a `Dataset` (gridded and interpolated in time on the fly), a
-`FlowField`, or a single `CartesianSnapshot` for a frozen field. A negative `T`
-integrates backwards. `method="rk4"` is the default; `"euler"` is available and
-roughly 10⁶× less accurate over one orbit of a rotating field.
-
-`FlowField` blends the two bracketing snapshots rather than freezing one, so a
-`dt` smaller than the snapshot spacing actually resolves the time variation, and
-it caches the unstructured→Cartesian interpolation per snapshot.
+`Particles(X, Y, mask=...)` removes particles where `mask` is `True` — use it to
+exclude points inside a solid body before starting integration.
 
 ### 6. Work in a rotated frame
 
@@ -247,7 +263,7 @@ Any mode can be handed back to the rest of the library for plotting:
 
 ```python
 snap = res.mode_snapshot(0)                      # a Snapshot
-field = snap.interpolate_on_grid(0.02)    # ... or interpolate it
+field = snap.interpolateOnCartesianGrid(0.02)    # ... or interpolate it
 ```
 
 `scripts/pod_aoa30.py` runs the whole pipeline and self-verifies. On the AoA=30
@@ -258,28 +274,31 @@ apart. Ten modes carry 99% of the energy.
 
 ### 8. Flow map and FTLE
 
+FTLE is **not** in the library yet; it is assembled from the pieces above. The
+shape of the calculation:
+
 ```python
-from flowkit import ftle
+p = Particles(X.ravel(), Y.ravel())
+for t in times:                                    # integrate forward in time
+    field = ds.snapshot(t).crop(m).interpolateOnCartesianGrid(element_size=h)
+    p = p.step(field, dt=dt, method="Euler")
 
-res = ftle(wake, x, y, t0=162.2, T=4.0, dt=0.02, element_size=0.02)
+# flow map, reshaped back onto the seeding grid
+fx = p.posx.reshape(X.shape)
+fy = p.posy.reshape(X.shape)
 
-res.ftle            # (ny, nx) -- ln(sigma)/|T|
-res.flowmap_x       # final positions, grid-shaped, NaN where escaped
-res.ridges(90)      # boolean mask of the strongest 10% -- LCS candidates
-res.escaped_fraction
+# Jacobian by finite differences, then the largest singular value
+dfxdy, dfxdx = np.gradient(fx, h)
+dfydy, dfydx = np.gradient(fy, h)
+...                                                # eigvalsh(J.T @ J), sqrt, /T
 ```
 
-A negative `T` gives the backward-time FTLE, whose ridges are attracting rather
-than repelling structures.
+Note the pitfall: `Particles.step` silently discards escaped particles, so
+`p.posx` will not generally have the same length as `X.ravel()` and the reshape
+above will fail once anything leaves the domain. This is issue 12 in
+`ISSUES.md`, and it is the main thing blocking a working FTLE routine.
 
-Validated two ways. A uniform strain field `u = (ax, -ay)` has the closed-form
-answer `FTLE = a` everywhere, and the implementation reproduces it to better
-than **3e-12**.
-The steady double gyre — available as `flowkit.double_gyre()` — puts its
-separatrix at exactly `x = 1`, and the ridge lands within 0.05 of it; with
-`epsilon=0.25` the ridge meanders off, as the canonical unsteady case should.
-
-`scripts/ftle_aoa30.py` runs it on the wake.
+---
 
 ## API reference
 
@@ -305,14 +324,14 @@ separatrix at exactly `x = 1`, and the ridge lands within 0.05 of it; with
 | `.times` | Array of times. |
 | `.length_scale` | Body length scale, or `None`. |
 | `.snapshot(time)` | A `Snapshot` linked back to this dataset. |
-| `.snapshots(times=None)` | Generator over all times by default. |
+| `.snapshots(times=None)` | Generator of snapshots (currently broken when `times` is omitted — issue 3). |
 | `.crop(xmin, xmax, ymin, ymax)` | New `Dataset` restricted to a box; every bound is optional. |
 | `.crop_relative(xmin, xmax, ymin, ymax, length_scale=None, origin=(0,0))` | Same, with bounds given in multiples of the length scale. |
 
 ### `flowkit.dataprocessing.Snapshot`
 
-Constructed as `Snapshot(x, y, u, v, p, dataset=None, index=None)` — the same
-`u, v, p` ordering that `sample()` returns.
+Constructed as `Snapshot(x, y, p, u, v, dataset=None, index=None)` — note the
+`p, u, v` ordering, which differs from the `u, v, p` that `sample()` returns.
 
 | Member | Description |
 |---|---|
@@ -320,21 +339,22 @@ Constructed as `Snapshot(x, y, u, v, p, dataset=None, index=None)` — the same
 | `Snapshot.from_xarray(field)` | From an already-selected slice; not linked, so `next`/`previous` will raise. |
 | `.x .y .u .v .p` | 1-D per-cell arrays. |
 | `.xmin .xmax .ymin .ymax` | Bounding box. |
-| `.next()` / `.previous()` | Adjacent snapshot in time. `IndexError` at either end, `NotAssociatedWithDataset` if detached. |
-| `.mask(...)` / `.mask_rotated(...)` | Boolean per-cell mask; every bound optional. |
-| `.crop(xmin=None, ..., mask=None)` | Same signature as `Dataset.crop`; keeps the dataset link, so `next()` returns the same region. |
-| `.cartesian_grid(element_size=None)` | The `(x, y)` axes that interpolation would use. |
-| `.interpolate_on_grid(element_size=None)` | Linear resampling → `CartesianSnapshot`. One cached Delaunay triangulation serves all three fields. |
+| `.next()` / `.previous()` | Adjacent snapshot in time; raises `NotAssociatedWithDataset` if unlinked. No bounds checking (issue 4). |
+| `.mask(xmin, xmax, ymin, ymax)` | Boolean per-cell mask; all four bounds required. |
+| `.crop(mask)` | New `Snapshot` from a boolean mask. Loses the dataset link. |
+| `.constructCartesianGrid(element_size=None)` | The `(x, y)` axes that interpolation would use. |
+| `.interpolateOnCartesianGrid(element_size=None)` | Linear `griddata` resampling → `CartesianSnapshot`. |
 
 ### `flowkit.dataprocessing.CartesianSnapshot`
 
 | Member | Description |
 |---|---|
-| `CartesianSnapshot(x, y, u, v, p)` | `x`, `y` are 1-D axes; the fields must be `(len(y), len(x))`. |
-| `.x .y .p .u .v .element_size` | Grid and fields. |
+| `CartesianSnapshot(x, y, p, u, v)` | `x`, `y` are 1-D axes; the fields must be `(len(y), len(x))`. |
+| `.x .y .p .u .v .elementSize` | Grid and fields. |
 | `.sample(xq, yq)` | Bilinear sample → `(u, v, p)`, `NaN` outside the grid. |
 
-Exception: `NotAssociatedWithDataset`.
+Exceptions: `InvalidSnapshotFormat` (defined, never raised) and
+`NotAssociatedWithDataset`.
 
 ### `flowkit.pod`
 
@@ -352,40 +372,13 @@ Exception: `NotAssociatedWithDataset`.
 large gap -- a uniform initial condition would otherwise distort the mean and
 add a spurious mode.
 
-### `flowkit.cases`
+### `flowkit.lagrangian.Particles`
 
 | Member | Description |
 |---|---|
-| `case(name)` | Look up a registered `Case`; `cases()` lists them. |
-| `Case.dataset()` | The cached NetCDF as a `Dataset`, cell volumes attached. |
-| `Case.convert()` | Read the OpenFOAM case and write the NetCDF. |
-| `Case.aoa` / `.speed` | Freestream angle in degrees and magnitude. |
-| `Case.figure(name)` | Output path, directory created on demand. |
-
-NetCDF resolution order: an explicit `nc=` on the entry, then `$FLOWKIT_DATA`,
-then `<repo>/data/`.
-
-### `flowkit.ftle`
-
-| Member | Description |
-|---|---|
-| `ftle(field, x, y, t0, T, dt, ...)` | FTLE over the grid spanned by 1-D axes `x`, `y`. |
-| `flow_map(...)` | Just the advected positions, grid-shaped. |
-| `double_gyre(A, epsilon, omega)` | The canonical analytic validation flow. |
-| `FTLEResult.ftle / .flowmap_x / .flowmap_y` | The field and the map it came from. |
-| `.ridges(percentile)` / `.escaped_fraction` / `.forward` | Inspection. |
-
-### `flowkit.lagrangian`
-
-| Member | Description |
-|---|---|
-| `Particles(x, y, mask=None)` | Tracers. `mask=True` blanks a particle (NaN) rather than removing it. |
-| `Particles.on_grid(x, y)` | Seed on a meshgrid; returns `(particles, shape)`. |
-| `.posx .posy .active .n_particles .n_active` | State. Length never changes. |
-| `.step(field, dt, t=None, method="rk4")` | One step; `"rk4"` or `"euler"`. |
-| `advect(field, particles, t0, T, dt, ...)` | Integrate over `T`; negative goes backwards. |
-| `FlowField(dataset, element_size)` | Velocity at any `(x, y, t)`, cached per snapshot. |
-
+| `Particles(X, Y, mask=None)` | Flat position arrays; `mask=True` entries are dropped. |
+| `.posx .posy .n_particles` | Current state. |
+| `.step(field, dt=None, method="Euler")` | One explicit Euler step through a `CartesianSnapshot`; returns a new `Particles` with escaped particles removed. `dt` is required in practice. |
 
 ---
 
@@ -395,15 +388,12 @@ then `<repo>/data/`.
 flowkit/                 the library
   io.py              OpenFOAM → xarray → NetCDF
   dataprocessing.py  Dataset / Snapshot / CartesianSnapshot
-  lagrangian.py      Particles, FlowField, advect
-  ftle.py            FTLE / LCS
-  cases.py           case registry
+  lagrangian.py      Particles
   pod.py             volume-weighted POD
 tests/               pytest suite (synthetic-field POD checks)
 scripts/             ad-hoc driver scripts (not tests, not importable API)
   test.py            plots a snapshot and its successor
   pod_aoa30.py       POD of the AoA=30 wake, with self-verification
-  ftle_aoa30.py      FTLE of the same wake
 data/                NetCDF caches — gitignored (*.nc)
 figures/             saved output figures
 ```
@@ -414,7 +404,7 @@ now-renamed directory; edit `casepath`/`outpath` before running it.
 ## Conventions
 
 - **2-D only.** `z` and `w` are dropped at read time.
-- **Field ordering.** `u, v, p` everywhere — constructors and `sample()` alike.
+- **Field ordering.** Constructors take `p, u, v`; `sample()` returns `u, v, p`.
 - **Grid ordering.** `CartesianSnapshot` fields are indexed `[y, x]`, matching
   `np.meshgrid` default (`xy`) output.
 - **Immutability.** `crop`, `step`, `next`, `previous` and friends all return

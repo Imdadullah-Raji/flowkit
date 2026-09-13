@@ -14,27 +14,20 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.dataprocessing import Dataset
-from src.io import attach_volumes
-from src.pod import pod
+from flowkit import Dataset
+from flowkit.cases import case
+from flowkit.pod import pod
 
-CASE = "/home/raji/Research/Thesis/static_airfoil/re500_aoa30"
-NC = "/home/raji/Research/analyze_cfd/data/re500_aoa30.nc"
-FIGDIR = "/home/raji/Research/flowkit/figures"
-
-# freestream direction from 0/U internalField -> the wake axis
-U_INF = (0.866025404, 0.500000000)
+CASE = case("re500_aoa30")
 
 
-def load(nc=NC, case=CASE, box=(-1, 9, -2, 2), every=1):
-    aoa = np.degrees(np.arctan2(U_INF[1], U_INF[0]))
-    ds = Dataset.from_netcdf(nc)
-    ds = Dataset(attach_volumes(ds.data, case), length_scale=ds.length_scale)
-    wake = ds.rotate(aoa).crop_relative(*box)
+def load(box=(-1, 9, -2, 2), every=1):
+    """Load the cached case, rotate onto the wake axis, crop to the near wake."""
+    wake = CASE.dataset().rotate(CASE.aoa).crop_relative(*box)
     if every > 1:
         wake = Dataset(wake.data.isel(time=slice(None, None, every)),
                        length_scale=wake.length_scale)
-    return aoa, wake
+    return CASE.aoa, wake
 
 
 def verify(res, wake):
@@ -74,7 +67,7 @@ def verify(res, wake):
     f2 = f[np.argmax(np.abs(np.fft.rfft(a2 - a2.mean())))]
     ratio = res.energies[1] / res.energies[0]
     corr = np.corrcoef(a1, a2)[0, 1]
-    st = f1 * 1.0 / np.hypot(*U_INF)          # Strouhal on chord
+    st = f1 * 1.0 / CASE.speed               # Strouhal on chord
     print(f"5. shedding pair    E2/E1 = {ratio:.3f}   f1 = {f1:.4f}, f2 = {f2:.4f}"
           f"   St = {st:.4f}")
     print(f"                    corr(a1,a2) = {corr:+.3f} (near 0 => ~90 deg apart)")
@@ -94,7 +87,7 @@ def plot(res, aoa, st):
     for a in ax:
         a.grid(alpha=.3)
     fig.tight_layout()
-    fig.savefig(f"{FIGDIR}/pod_energy.png", dpi=130)
+    fig.savefig(CASE.figure("pod_energy.png"), dpi=130)
 
     nm = min(6, res.n_modes)
     fig, axes = plt.subplots(nm, 1, figsize=(9, 2.1 * nm), sharex=True)
@@ -107,7 +100,7 @@ def plot(res, aoa, st):
         fig.colorbar(im, ax=a, pad=.01, label="$\\phi_u$")
     np.atleast_1d(axes)[-1].set_xlabel("streamwise x/c  (frame rotated %.0f deg)" % aoa)
     fig.tight_layout()
-    fig.savefig(f"{FIGDIR}/pod_modes.png", dpi=130)
+    fig.savefig(CASE.figure("pod_modes.png"), dpi=130)
 
     fig, ax = plt.subplots(figsize=(9, 3))
     for k in range(min(4, res.n_modes)):
@@ -116,8 +109,8 @@ def plot(res, aoa, st):
     ax.legend(ncol=4, fontsize=8)
     ax.grid(alpha=.3)
     fig.tight_layout()
-    fig.savefig(f"{FIGDIR}/pod_coefficients.png", dpi=130)
-    print(f"\nfigures -> {FIGDIR}/pod_{{energy,modes,coefficients}}.png")
+    fig.savefig(CASE.figure("pod_coefficients.png"), dpi=130)
+    print(f"\nfigures -> {CASE.figure('pod_*.png')}")
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ import numpy as np
 import xarray as xr
 from scipy.linalg import eigh
 
-from src.dataprocessing import Dataset, Snapshot
+from flowkit.dataprocessing import Dataset, Snapshot
 
 
 class MissingCellVolumes(Exception):
@@ -89,17 +89,17 @@ class PODResult:
     def mode_snapshot(self, k) -> Snapshot:
         """
         Mode k as a Snapshot, so it can be plotted or interpolated with the
-        existing machinery (scatter, interpolateOnCartesianGrid, ...).
+        existing machinery (scatter, interpolate_on_grid, ...).
 
         The p field carries the mode's local energy density, which is what you
         usually want as the background of a mode plot.
         """
         u, v = self.modes[k, :, 0], self.modes[k, :, 1]
-        return Snapshot(self.x, self.y, u**2 + v**2, u, v)
+        return Snapshot(self.x, self.y, u, v, u**2 + v**2)
 
     def mean_snapshot(self) -> Snapshot:
         speed = np.hypot(self.mean_u, self.mean_v)
-        return Snapshot(self.x, self.y, speed, self.mean_u, self.mean_v)
+        return Snapshot(self.x, self.y, self.mean_u, self.mean_v, speed)
 
     def reconstruct(self, n_modes=None, time_index=None):
         """
@@ -137,7 +137,7 @@ def pod(dataset, times=None, n_modes=None, subtract_mean=True,
     Parameters
     ----------
     dataset : Dataset or xr.Dataset
-        Must carry the 'V' cell coordinate -- see src.io.attach_volumes.
+        Must carry the 'V' cell coordinate -- see flowkit.io.attach_volumes.
     times : array-like or slice, optional
         Snapshots to use. Default is all of them.
     n_modes : int, optional
@@ -157,7 +157,7 @@ def pod(dataset, times=None, n_modes=None, subtract_mean=True,
         raise MissingCellVolumes(
             "Dataset has no 'V' cell coordinate. Either reconvert the case "
             "(read_foamcase now reads volumes) or, for an existing NetCDF:\n"
-            "    from src.io import attach_volumes\n"
+            "    from flowkit.io import attach_volumes\n"
             "    ds = attach_volumes(ds, casepath)"
         )
 

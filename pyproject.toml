@@ -33,7 +33,7 @@ dev = [
 
 [tool.setuptools]
 
-packages = ["src"]
+packages = ["flowkit"]
 
 [tool.ruff]
 line-length = 100

@@ -1,18 +1,37 @@
-from src.io import foam_to_netcdf
-from src.dataprocessing import Dataset
+"""Convert the AoA=30 case to NetCDF and eyeball one snapshot."""
+
+import argparse
+
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from flowkit.cases import case
 
-casepath = '/home/raji/Research/Thesis/static_airfoil/re500_aoa30'
-outpath =  '/home/raji/Research/analyze_cfd/data/re500_aoa30.nc'
-figsavepath = '/home/raji/Research/analyze_cfd/figures/'
+CASE = case("re500_aoa30")
 
-#out = foam_to_netcdf(casepath=casepath, outpath= outpath, patch='airfoil')
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--convert", action="store_true",
+                    help="read the OpenFOAM case and write the NetCDF cache")
+    ap.add_argument("--time", type=float, default=None,
+                    help="time to plot (default: the last one)")
+    args = ap.parse_args()
 
-ds = Dataset.from_netcdf(outpath)
-aoa = 30
-ds = ds.rotate(aoa).crop(-1, 10, -5, 5)
-snapshot = ds.snapshot(200.076175)
+    if args.convert:
+        print("converting ->", CASE.convert(overwrite=True))
 
-plt.scatter(snapshot.x, snapshot.y, c= snapshot.u, s=1)
-plt.show()
+    ds = CASE.dataset()
+    t = args.time if args.time is not None else float(ds.times[-1])
+    snap = ds.snapshot(t)
+    print(ds)
+    print(snap)
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+    im = ax.scatter(snap.x, snap.y, c=snap.u, s=1, cmap="RdBu_r")
+    ax.set(xlabel="x/c", ylabel="y/c", aspect="equal", title=f"u at t={snap.time:g}")
+    fig.colorbar(im, ax=ax, label="u")
+    fig.tight_layout()
+    out = CASE.figure(f"aoa30_u_t{snap.time:g}.png")
+    fig.savefig(out, dpi=130)
+    print("figure ->", out)
