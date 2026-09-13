@@ -40,6 +40,7 @@ The library is three layers, each in its own module:
 | I/O | `src.io` | functions | OpenFOAM case → `xarray.Dataset` → NetCDF |
 | Fields | `src.dataprocessing` | `Dataset`, `Snapshot`, `CartesianSnapshot` | the whole time series, one instant, one instant on a regular grid |
 | Particles | `src.lagrangian` | `Particles` | positions advected through a `CartesianSnapshot` |
+| Modal | `src.pod` | `pod()`, `PODResult` | volume-weighted POD of the velocity fluctuations |
 
 ```
 OpenFOAM case ──read_foamcase──> xr.Dataset ──Dataset.from_*──> Dataset
@@ -83,6 +84,22 @@ foam_to_netcdf(
 square). Its convex-hull diameter is stored on the dataset as the attribute
 `length_scale`, which lets you later crop in body-lengths instead of metres.
 The default is `'airfoil'` — pass your own patch name if that is not it.
+
+**Cell volumes.** POD needs them (nothing else does), and they are read into the
+`V` cell coordinate at conversion time. Write them once — the mesh is static, so
+a single copy in `constant/` is correct:
+
+```bash
+cd /path/to/case
+postProcess -func writeCellVolumes -latestTime
+mv <latestTime>/Vc constant/V
+```
+
+`-latestTime` matters: without it OpenFOAM writes the field into *every* time
+directory. `read_cell_volumes` accepts either the OpenFOAM `Vc` name or a
+renamed `V`, and looks in `constant/` before the latest time directory. A case
+without volumes still converts — it just warns, and `pod()` later tells you how
+to add them with `attach_volumes` rather than making you reconvert.
 
 ### 2. Load and take a snapshot
 
@@ -165,7 +182,74 @@ step returns a new object.
 `Particles(X, Y, mask=...)` removes particles where `mask` is `True` — use it to
 exclude points inside a solid body before starting integration.
 
-### 6. Flow map and FTLE
+### 6. Work in a rotated frame
+
+A wake that convects at an angle does not fit an axis-aligned box. Rotate the
+domain into the streamwise frame first, then crop normally:
+
+```python
+aoa = np.degrees(np.arctan2(0.5, 0.866025404))    # from 0/U internalField -> 30.0
+wake = ds.rotate(aoa).crop_relative(-1, 9, -2, 2)
+```
+
+`rotate()` rotates the **velocity components as well as the coordinates**, so
+advection stays correct; rotating only `x`/`y` would leave every plot looking
+right while integrating in the wrong direction. It records `frame_angle` and
+`frame_origin` in the dataset attrs.
+
+For the same 10x4 chord wake region on the AoA=30 case, this is not a cosmetic
+choice:
+
+| | bounding box | grid @ h=0.02 | NaN |
+|---|---|---|---|
+| lab frame (diagonal) | 10.48 x 8.36 | 0.22M pts | 54.7% |
+| rotated frame | 10.00 x 4.00 | 0.10M pts | 1.0% |
+
+Use `crop_rotated()` instead if you want the tilted selection but need to keep
+lab-frame coordinates.
+
+### 7. Proper orthogonal decomposition
+
+POD needs an inner product, and on an unstructured mesh the correct one is an
+integral, `<a,b> = sum a_i b_i V_i`. Cell volumes in a body-fitted mesh span
+five orders of magnitude, so an unweighted POD is dominated by the refined
+near-body region purely because it holds more cells per unit area.
+
+Cell volumes therefore travel with the dataset as the `V` cell coordinate, which
+means `crop`, `rotate` and friends carry them automatically. Write them once per
+case (see **Cell volumes** below), then:
+
+```python
+from src.pod import pod
+
+res = pod(wake)                     # velocity fluctuations about the time mean
+print(res)                          # <PODResult 412 modes, 36826 cells, ...>
+
+res.energy_fraction()[:4]           # 0.227, 0.220, 0.177, 0.167
+res.n_modes_for(0.99)               # 10
+res.coefficients[:, 0]              # a_1(t)
+u, v = res.reconstruct(n_modes=10)  # low-rank reconstruction
+```
+
+Modes are orthonormal in the volume-weighted inner product. Check it with
+`res.gram()`, and use `res.weighted_inner(a, b)` rather than flattening by hand
+-- `modes` is `(n_modes, n_cells, 2)`, so a flat `np.tile(V, 2)` applies the
+wrong weight to every entry (`np.repeat(V, 2)` is the flat equivalent).
+
+Any mode can be handed back to the rest of the library for plotting:
+
+```python
+snap = res.mode_snapshot(0)                      # a Snapshot
+field = snap.interpolateOnCartesianGrid(0.02)    # ... or interpolate it
+```
+
+`scripts/pod_aoa30.py` runs the whole pipeline and self-verifies. On the AoA=30
+wake (36826 cells, 1289 snapshots, ~31 s) the modes come out in near-degenerate
+pairs -- 22.7/22.0%, 17.6/16.7%, 8.0/7.9% -- the signature of periodic vortex
+shedding, with `a_1` and `a_2` sharing one frequency (St = 0.319) and 90 degrees
+apart. Ten modes carry 99% of the energy.
+
+### 8. Flow map and FTLE
 
 FTLE is **not** in the library yet; it is assembled from the pieces above. The
 shape of the calculation:
@@ -201,6 +285,8 @@ above will fail once anything leaves the domain. This is issue 12 in
 |---|---|
 | `read_foamcase(casepath, patch='airfoil')` | Parse every numeric time directory of an OpenFOAM case into an `xarray.Dataset` with variables `p` (`time`, `cell`) and `U` (`time`, `cell`, `comp`), coords `time`, `x`, `y`, and attrs `length_scale`, `source_case`. |
 | `foam_to_netcdf(casepath, outpath, patch='airfoil')` | `read_foamcase` + `to_netcdf`. Returns `outpath`. |
+| `read_cell_volumes(casepath)` | Cell volumes from `constant/V` (or `Vc`), falling back to the latest time directory. Raises with the `postProcess` command if absent. |
+| `attach_volumes(ds, casepath=None)` | Add the `V` coord to a dataset converted before volumes were read, without reconverting. Falls back to the `source_case` attr. |
 | `body_length_scale(casepath, patch='airfoil')` | Maximum chord across the convex hull of the named boundary patch, in the mesh's units. |
 
 ### `src.dataprocessing.Dataset`
@@ -247,6 +333,22 @@ Constructed as `Snapshot(x, y, p, u, v, dataset=None, index=None)` — note the
 Exceptions: `InvalidSnapshotFormat` (defined, never raised) and
 `NotAssociatedWithDataset`.
 
+### `src.pod`
+
+| Member | Description |
+|---|---|
+| `pod(dataset, times=None, n_modes=None, subtract_mean=True, drop_initial=True)` | Volume-weighted POD by the method of snapshots. Requires the `V` coord. |
+| `PODResult.modes` | `(n_modes, n_cells, 2)`, orthonormal in the `V` inner product. |
+| `.energies` / `.energy_fraction()` / `.cumulative_energy()` / `.n_modes_for(f)` | Spectrum. |
+| `.coefficients` | `(n_times, n_modes)` temporal coefficients. |
+| `.gram(k)` / `.weighted_inner(a, b)` | Weighted inner products, with the cell-axis layout handled for you. |
+| `.mode_snapshot(k)` / `.mean_snapshot()` | As a `Snapshot`, for plotting and interpolation. |
+| `.reconstruct(n_modes, time_index=None)` | Low-rank reconstruction. |
+
+`drop_initial` discards a leading `t=0` snapshot separated from the rest by a
+large gap -- a uniform initial condition would otherwise distort the mean and
+add a spurious mode.
+
 ### `src.lagrangian.Particles`
 
 | Member | Description |
@@ -264,8 +366,11 @@ src/                 the library
   io.py              OpenFOAM → xarray → NetCDF
   dataprocessing.py  Dataset / Snapshot / CartesianSnapshot
   lagrangian.py      Particles
+  pod.py             volume-weighted POD
+tests/               pytest suite (synthetic-field POD checks)
 scripts/             ad-hoc driver scripts (not tests, not importable API)
   test.py            plots a snapshot and its successor
+  pod_aoa30.py       POD of the AoA=30 wake, with self-verification
 data/                NetCDF caches — gitignored (*.nc)
 figures/             saved output figures
 ```

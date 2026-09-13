@@ -65,6 +65,57 @@ class Dataset:
             ymin=y0 + ymin * L, ymax=y0 + ymax * L,
         )
 
+    def crop_rotated(self, xmin=None, xmax=None, ymin=None, ymax=None,
+                     angle=0.0, origin=(0, 0), degrees=True) -> "Dataset":
+        """
+        Crop to a rectangle whose axes are rotated by `angle` about `origin`.
+
+        Bounds are given in the rotated frame: xmin/xmax run along `angle`
+        (streamwise), ymin/ymax across it. Coordinates are left in the lab
+        frame -- only the cell selection changes. Use .rotate() as well if you
+        want the region itself expressed in the rotated frame.
+        """
+        x = self._data['x'].values
+        y = self._data['y'].values
+        mask = _rotated_bounds_mask(x, y, xmin, xmax, ymin, ymax,
+                                    angle=angle, origin=origin, degrees=degrees)
+        return type(self)(self._data.isel(cell=mask), length_scale=self.length_scale)
+
+    def crop_rotated_relative(self, xmin, xmax, ymin, ymax, angle=0.0,
+                              length_scale=None, origin=(0, 0), degrees=True) -> "Dataset":
+        """As crop_rotated, with bounds in multiples of the body length scale."""
+        L = length_scale if length_scale is not None else self.length_scale
+        if L is None:
+            raise ValueError(
+                "No length_scale given and none stored on this Dataset "
+                "(construct via from_foam, or pass length_scale= explicitly)."
+            )
+        return self.crop_rotated(
+            xmin=xmin * L, xmax=xmax * L, ymin=ymin * L, ymax=ymax * L,
+            angle=angle, origin=origin, degrees=degrees,
+        )
+
+    def rotate(self, angle, origin=(0, 0), degrees=True) -> "Dataset":
+        """
+        Re-express the whole dataset in a frame rotated by `angle` about `origin`.
+
+        Rotates the x/y coordinates *and* the U components, so the data stays
+        physically consistent and particle advection remains correct. After
+        this, a region aligned with `angle` is axis-aligned, so plain crop()
+        and interpolateOnCartesianGrid() work on it without waste.
+        """
+        ds = self._data.copy()
+        xr_, yr_ = _rotate(ds['x'].values, ds['y'].values, angle, origin, degrees)
+
+        U = np.array(ds['U'].values)
+        U[..., 0], U[..., 1] = _rotate_vector(U[..., 0], U[..., 1], angle, degrees)
+
+        ds = ds.assign_coords(x=('cell', xr_), y=('cell', yr_))
+        ds['U'] = (self._data['U'].dims, U)
+        ds.attrs['frame_angle'] = angle if degrees else np.degrees(angle)
+        ds.attrs['frame_origin'] = tuple(origin)
+        return type(self)(ds, length_scale=self.length_scale)
+
 class Snapshot:
 
     def __init__(self, x, y, p, u, v, dataset= None, index= None):
@@ -177,9 +228,20 @@ class Snapshot:
             (self._y>=ymin) & 
             (self._y<=ymax)
         )
-        #add None logic later 
+        #add None logic later
         return valid
-    
+
+    def mask_rotated(self, xmin=None, xmax=None, ymin=None, ymax=None,
+                     angle=0.0, origin=(0, 0), degrees=True):
+        """
+        Boolean mask for a rectangle rotated by `angle` about `origin`.
+
+        Bounds are in the rotated frame (xmin/xmax streamwise along `angle`).
+        Unlike mask(), omitted bounds are simply not applied.
+        """
+        return _rotated_bounds_mask(self._x, self._y, xmin, xmax, ymin, ymax,
+                                    angle=angle, origin=origin, degrees=degrees)
+
 
 
     def interpolateOnCartesianGrid(self, element_size=None ):
@@ -288,6 +350,34 @@ class CartesianSnapshot:
             v.reshape(shape),
             p.reshape(shape)
         )
+
+
+def _rotate(x, y, angle, origin=(0, 0), degrees=True):
+    """
+    Express points in a frame rotated by `angle` about `origin`.
+
+    A point lying along the direction `angle` maps onto the positive
+    rotated-x axis, so `angle` should be the direction you want to become
+    "downstream" (e.g. the freestream angle).
+    """
+    th = np.radians(angle) if degrees else angle
+    c, s = np.cos(th), np.sin(th)
+    dx = np.asarray(x) - origin[0]
+    dy = np.asarray(y) - origin[1]
+    return c * dx + s * dy, -s * dx + c * dy
+
+
+def _rotate_vector(u, v, angle, degrees=True):
+    """Rotate vector components into the same frame as _rotate (no translation)."""
+    th = np.radians(angle) if degrees else angle
+    c, s = np.cos(th), np.sin(th)
+    return c * u + s * v, -s * u + c * v
+
+
+def _rotated_bounds_mask(x, y, xmin=None, xmax=None, ymin=None, ymax=None,
+                         angle=0.0, origin=(0, 0), degrees=True):
+    xr_, yr_ = _rotate(x, y, angle, origin, degrees)
+    return _bounds_mask(xr_, yr_, xmin, xmax, ymin, ymax)
 
 
 def _bounds_mask(x, y, xmin=None, xmax=None, ymin=None, ymax=None):
