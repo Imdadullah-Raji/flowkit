@@ -12,6 +12,10 @@ case once here and refer to it by name instead.
     wake = ds.rotate(c.aoa).crop_relative(-1, 9, -2, 2)
     fig.savefig(c.figure("pod_modes.png"))
 
+Cases are declared in `cases.toml` -- read from $FLOWKIT_CASES if set, else
+from <repo>/cases.toml. Registering a simulation is a config edit, not a code
+edit; nothing about your data lives in the package.
+
 Path resolution for the NetCDF, in order:
   1. an explicit `nc=` on the registry entry
   2. $FLOWKIT_DATA/<name>.nc
@@ -19,10 +23,15 @@ Path resolution for the NetCDF, in order:
 """
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+try:                                    # stdlib from 3.11
+    import tomllib
+except ModuleNotFoundError:             # pragma: no cover
+    import tomli as tomllib
 
 REPO = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get("FLOWKIT_DATA", REPO / "data"))
@@ -100,31 +109,68 @@ class Case:
         return Path(foam_to_netcdf(str(self.path), str(nc), patch=self.patch))
 
 
-_SIN30, _COS30 = 0.500000000, 0.866025404
+CASES_FILE = Path(os.environ.get("FLOWKIT_CASES", REPO / "cases.toml"))
 
-REGISTRY = {
-    "re500_aoa30": Case(
-        name="re500_aoa30",
-        path=Path("/home/raji/Research/Thesis/static_airfoil/re500_aoa30"),
-        patch="airfoil",
-        u_inf=(_COS30, _SIN30),
-        # Converted before the repo had a data/ directory. Drop this line after
-        # moving the file into <repo>/data/ (or set $FLOWKIT_DATA).
-        nc=Path("/home/raji/Research/analyze_cfd/data/re500_aoa30.nc"),
-        notes="Static airfoil, Re=500, AoA=30. Static 2-D mesh, 63360 cells, "
-              "chord 1.0, times 120.5-245.65. Sheds at St~0.319.",
-    ),
-}
+_CACHE = None
+
+
+def _build(name, entry, defaults):
+    merged = {**defaults, **entry}
+    if "path" not in merged:
+        raise KeyError(f"Case {name!r} has no 'path' key.")
+    known = {"path", "patch", "u_inf", "nc", "figures", "notes"}
+    unknown = set(merged) - known
+    if unknown:
+        raise KeyError(
+            f"Case {name!r} has unknown key(s) {sorted(unknown)}; "
+            f"known keys are {sorted(known)}."
+        )
+    return Case(
+        name=name,
+        path=Path(merged["path"]),
+        patch=merged.get("patch", "airfoil"),
+        u_inf=tuple(merged.get("u_inf", (1.0, 0.0))),
+        nc=Path(merged["nc"]) if merged.get("nc") else None,
+        figures=Path(merged["figures"]) if merged.get("figures") else None,
+        notes=merged.get("notes", "").strip(),
+    )
+
+
+def load_registry(path=None):
+    """Parse the case file. Raises if it is missing -- there is no implicit empty."""
+    path = Path(path) if path is not None else CASES_FILE
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"No case file at {path}.\n"
+            f"Create it, or point $FLOWKIT_CASES at one. Minimal form:\n\n"
+            f"    [cases.my_case]\n"
+            f'    path  = "/path/to/openfoam/case"\n'
+            f'    patch = "airfoil"\n'
+            f"    u_inf = [1.0, 0.0]\n"
+        )
+    with open(path, "rb") as f:
+        doc = tomllib.load(f)
+    defaults = doc.get("defaults", {})
+    return {n: _build(n, e, defaults) for n, e in doc.get("cases", {}).items()}
+
+
+def registry(reload=False):
+    """The parsed registry, cached. `reload=True` re-reads the file."""
+    global _CACHE
+    if _CACHE is None or reload:
+        _CACHE = load_registry()
+    return _CACHE
 
 
 def case(name) -> Case:
-    if name not in REGISTRY:
+    reg = registry()
+    if name not in reg:
         raise KeyError(
-            f"Unknown case {name!r}. Registered: {sorted(REGISTRY)}.\n"
-            f"Add it to REGISTRY in flowkit/cases.py."
+            f"Unknown case {name!r}. Registered: {sorted(reg)}.\n"
+            f"Add a [cases.{name}] table to {CASES_FILE}."
         )
-    return REGISTRY[name]
+    return reg[name]
 
 
 def cases():
-    return sorted(REGISTRY)
+    return sorted(registry())

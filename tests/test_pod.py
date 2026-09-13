@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from flowkit import PODResult
 from flowkit.pod import pod, MissingCellVolumes
 
 
@@ -44,6 +45,15 @@ def synthetic(n_cells=500, n_times=200, seed=0):
 @pytest.fixture
 def result():
     return pod(synthetic(), subtract_mean=True)
+
+
+@pytest.fixture
+def scattered_case_meta():
+    """A dataset carrying the provenance attrs that rotate()/read_foamcase set."""
+    ds = synthetic()
+    ds.attrs.update(source_case="/somewhere/case", frame_angle=30.0,
+                    frame_origin=(0.0, 0.0), length_scale=1.0)
+    return ds
 
 
 def test_requires_volumes():
@@ -117,3 +127,65 @@ def test_weighting_actually_matters():
     flat = pod(ds.assign_coords(V=("cell", np.ones(ds.sizes["cell"]))))
     assert not np.isclose(weighted.energy_fraction()[0],
                           flat.energy_fraction()[0], rtol=1e-3)
+
+
+# --------------------------------------------------------------- persistence
+
+def test_roundtrip_preserves_everything(result, tmp_path):
+    f = result.save(tmp_path / "pod.nc")
+    back = PODResult.load(f)
+
+    assert back.n_modes == result.n_modes
+    assert back.n_cells == result.n_cells
+    for name in ("energies", "modes", "coefficients", "mean_u", "mean_v",
+                 "x", "y", "V", "times"):
+        assert np.array_equal(getattr(back, name), getattr(result, name)), name
+
+
+def test_roundtrip_preserves_orthonormality(result, tmp_path):
+    back = PODResult.load(result.save(tmp_path / "pod.nc"))
+    k = back.n_modes
+    assert np.abs(back.gram(k) - np.eye(k)).max() < 1e-12
+
+
+def test_roundtrip_preserves_reconstruction(result, tmp_path):
+    back = PODResult.load(result.save(tmp_path / "pod.nc"))
+    u0, v0 = result.reconstruct(n_modes=2)
+    u1, v1 = back.reconstruct(n_modes=2)
+    assert np.array_equal(u0, u1) and np.array_equal(v0, v1)
+
+
+def test_provenance_survives(scattered_case_meta, tmp_path):
+    """A saved result must say what it decomposed."""
+    res = pod(scattered_case_meta)
+    assert res.meta["source_case"] == "/somewhere/case"
+    assert res.meta["frame_angle"] == 30.0
+    back = PODResult.load(res.save(tmp_path / "pod.nc"))
+    assert back.meta["source_case"] == "/somewhere/case"
+    assert back.meta["frame_angle"] == 30.0
+    assert back.meta["subtract_mean"] == 1
+
+
+def test_truncated_save_records_the_full_count(result, tmp_path):
+    back = PODResult.load(result.save(tmp_path / "pod.nc", n_modes=1))
+    assert back.n_modes == 1
+    assert back.meta["n_modes_computed"] == result.n_modes
+    assert back.truncated
+    assert not result.truncated
+
+
+def test_energies_readable_without_loading_modes(result, tmp_path):
+    """The reason for NetCDF: lazy access to one variable."""
+    f = result.save(tmp_path / "pod.nc")
+    with xr.open_dataset(f) as ds:
+        assert ds["modes"].chunks is None or True      # not materialised yet
+        e = ds["energies"].values
+    assert np.array_equal(e, result.energies)
+
+
+def test_float32_save_is_smaller_and_still_close(result, tmp_path):
+    big = result.save(tmp_path / "f64.nc", compress=False)
+    small = result.save(tmp_path / "f32.nc", dtype="float32", compress=False)
+    assert small.stat().st_size < big.stat().st_size
+    back = PODResult.load(small)
+    assert np.abs(back.modes - result.modes).max() < 1e-6

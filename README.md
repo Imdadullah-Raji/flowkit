@@ -250,6 +250,21 @@ snap = res.mode_snapshot(0)                      # a Snapshot
 field = snap.interpolate_on_grid(0.02)    # ... or interpolate it
 ```
 
+Results are saved as NetCDF, so a decomposition is computed once:
+
+```python
+res.save("data/pod_aoa30.nc")                 # 210 MB, all 412 modes
+res.save("data/pod_aoa30_20.nc", n_modes=20)  #  11 MB, well past the 99% mark
+res = PODResult.load("data/pod_aoa30.nc")
+```
+
+The file is self-describing and lazily readable — `xr.open_dataset(f)["energies"]`
+returns the spectrum without touching the 210 MB of modes. It also records what
+was decomposed: `source_case`, `frame_angle`, `subtract_mean`, `drop_initial`,
+and `n_modes_computed`, so a truncated file knows it is truncated
+(`res.truncated`). `dtype="float32"` halves the size, at the cost of taking
+`gram()` from 1e-15 to ~1e-7 — fine for plotting, not for verification.
+
 `scripts/pod_aoa30.py` runs the whole pipeline and self-verifies. On the AoA=30
 wake (36826 cells, 1289 snapshots, ~31 s) the modes come out in near-degenerate
 pairs -- 22.7/22.0%, 17.6/16.7%, 8.0/7.9% -- the signature of periodic vortex
@@ -347,6 +362,8 @@ Exception: `NotAssociatedWithDataset`.
 | `.gram(k)` / `.weighted_inner(a, b)` | Weighted inner products, with the cell-axis layout handled for you. |
 | `.mode_snapshot(k)` / `.mean_snapshot()` | As a `Snapshot`, for plotting and interpolation. |
 | `.reconstruct(n_modes, time_index=None)` | Low-rank reconstruction. |
+| `.save(path, n_modes=None, dtype=None)` / `PODResult.load(path)` | NetCDF persistence. |
+| `.meta` / `.truncated` | Provenance, and whether modes were dropped on save. |
 
 `drop_initial` discards a leading `t=0` snapshot separated from the rest by a
 large gap -- a uniform initial condition would otherwise distort the mean and
@@ -361,6 +378,23 @@ add a spurious mode.
 | `Case.convert()` | Read the OpenFOAM case and write the NetCDF. |
 | `Case.aoa` / `.speed` | Freestream angle in degrees and magnitude. |
 | `Case.figure(name)` | Output path, directory created on demand. |
+
+Cases are declared in `cases.toml` at the repo root (or `$FLOWKIT_CASES`), not
+in the package — registering a simulation is a config edit, not a code edit:
+
+```toml
+[defaults]
+patch = "airfoil"
+u_inf = [1.0, 0.0]
+
+[cases.re500_aoa30]
+path  = "/home/raji/Research/Thesis/static_airfoil/re500_aoa30"
+u_inf = [0.866025404, 0.5]
+notes = "Static airfoil, Re=500, AoA=30. Sheds at St~0.319."
+```
+
+`[defaults]` applies to every case unless overridden. An unknown key is an error
+rather than being silently ignored, so a typo'd `u_infinity` fails loudly.
 
 NetCDF resolution order: an explicit `nc=` on the entry, then `$FLOWKIT_DATA`,
 then `<repo>/data/`.
@@ -397,9 +431,10 @@ flowkit/                 the library
   dataprocessing.py  Dataset / Snapshot / CartesianSnapshot
   lagrangian.py      Particles, FlowField, advect
   ftle.py            FTLE / LCS
-  cases.py           case registry
+  cases.py           case registry (reads ../cases.toml)
   pod.py             volume-weighted POD
-tests/               pytest suite (synthetic-field POD checks)
+cases.toml           the case registry
+tests/               pytest suite
 scripts/             ad-hoc driver scripts (not tests, not importable API)
   test.py            plots a snapshot and its successor
   pod_aoa30.py       POD of the AoA=30 wake, with self-verification

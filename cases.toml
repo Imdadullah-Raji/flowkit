@@ -1,0 +1,44 @@
+# flowkit case registry
+#
+# One [cases.<name>] table per simulation. `case("<name>")` looks them up.
+# Anything in [defaults] applies to every case unless the case overrides it.
+#
+# Keys:
+#   path   (required)  the OpenFOAM case directory
+#   patch              boundary patch used for the body length scale
+#   u_inf              freestream [ux, uy]; sets the wake axis via Case.aoa
+#   nc                 explicit NetCDF path; otherwise $FLOWKIT_DATA/<name>.nc
+#                      then <repo>/data/<name>.nc
+#   figures            output directory; otherwise <repo>/figures
+#   notes              free text
+#
+# This file is read from $FLOWKIT_CASES if set, else <repo>/cases.toml.
+
+[defaults]
+patch = "airfoil"
+u_inf = [1.0, 0.0]
+
+[cases.re500_aoa30]
+path  = "/home/raji/Research/Thesis/static_airfoil/re500_aoa30"
+u_inf = [0.866025404, 0.5]
+# Converted before the repo had a data/ directory. Drop this line after moving
+# the file into <repo>/data/ (or point $FLOWKIT_DATA at its directory).
+nc    = "/home/raji/Research/analyze_cfd/data/re500_aoa30.nc"
+notes = """
+Static airfoil, Re=500, AoA=30. Static 2-D mesh, 63360 cells, chord 1.0,
+times 120.5-245.65 (plus a t=0 uniform IC that pod() drops). Sheds at St~0.319;
+POD modes arrive in pairs 22.7/22.0, 17.6/16.7, 8.0/7.9 %.
+"""
+
+[cases.step_input_aoa]
+path  = "/home/raji/Research/Thesis/step_input_aoa"
+notes = """
+Pitching airfoil: solidBody smootherstepMotion, dAlpha = -0.17 rad about
+(0.25, 0, 0), ramped over t in [0, 0.5] then held. 590 time directories.
+
+MOVING MESH -- do not convert with read_foamcase as it stands. It reads
+constant/polyMesh, which is the undeflected mesh, so post-ramp fields would be
+attached to coordinates up to 5.01 units wrong, silently. See ISSUES.md #33.
+u_inf is not recorded here because 0/U is nonuniform; set it explicitly before
+using Case.aoa.
+"""

@@ -22,6 +22,7 @@ dependencies = [
     "xarray>=2023.1",
     "netCDF4>=1.6",
     "fluidfoam>=0.2",
+    'tomli>=2.0; python_version < "3.11"',   # tomllib is stdlib from 3.11
 ]
 
 [project.optional-dependencies]

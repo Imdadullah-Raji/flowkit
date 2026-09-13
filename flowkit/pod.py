@@ -27,8 +27,10 @@ class PODResult:
     """
     Spatial modes, temporal coefficients and energies from a volume-weighted POD.
 
-    Modes are orthonormal in the volume-weighted inner product, i.e.
-    Phi.T @ diag(w) @ Phi == I, with w = tile(V, 2) over the stacked (u, v) state.
+    Modes are orthonormal in the volume-weighted inner product: gram() returns
+    the identity. The weight belongs to the *cell* axis, so if you flatten a
+    (n_cells, 2) field yourself the flat weight is np.repeat(V, 2), not
+    np.tile(V, 2) -- see weighted_inner().
 
     A snapshot is reconstructed as
 
@@ -37,7 +39,7 @@ class PODResult:
     """
 
     def __init__(self, modes, energies, coefficients, mean_u, mean_v,
-                 x, y, V, times):
+                 x, y, V, times, meta=None):
         self.modes = modes                  # (n_modes, n_cells, 2)
         self.energies = energies            # (n_modes,)
         self.coefficients = coefficients    # (n_times, n_modes)
@@ -47,6 +49,9 @@ class PODResult:
         self.y = y
         self.V = V
         self.times = times
+        # Where this came from: source case, frame angle, pod() options. A
+        # result that cannot say what it decomposed is not much use later.
+        self.meta = dict(meta or {})
 
     @property
     def n_modes(self):
@@ -115,6 +120,87 @@ class PODResult:
         u = self.mean_u + a @ self.modes[:k, :, 0]
         v = self.mean_v + a @ self.modes[:k, :, 1]
         return (u[0], v[0]) if time_index is not None else (u, v)
+
+    # ------------------------------------------------------------ persistence
+
+    def to_dataset(self, n_modes=None, dtype=None) -> xr.Dataset:
+        """The result as an xarray Dataset -- the form save() writes."""
+        k = self.n_modes if n_modes is None else min(int(n_modes), self.n_modes)
+        modes = self.modes[:k]
+        if dtype is not None:
+            modes = modes.astype(dtype)
+
+        attrs = {str(a): b for a, b in self.meta.items() if b is not None}
+        attrs.update(n_modes_computed=int(self.n_modes), n_modes_saved=int(k))
+        # NetCDF attrs must be scalars, strings or arrays; stringify the rest.
+        for a, b in list(attrs.items()):
+            if not isinstance(b, (str, int, float, np.integer, np.floating,
+                                  list, tuple, np.ndarray)):
+                attrs[a] = str(b)
+
+        return xr.Dataset(
+            {
+                "modes": (("mode", "cell", "comp"), modes),
+                "energies": (("mode",), self.energies[:k]),
+                "coefficients": (("time", "mode"), self.coefficients[:, :k]),
+                "mean_u": (("cell",), self.mean_u),
+                "mean_v": (("cell",), self.mean_v),
+            },
+            coords={
+                "mode": np.arange(k),
+                "time": self.times,
+                "x": ("cell", self.x),
+                "y": ("cell", self.y),
+                "V": ("cell", self.V),
+            },
+            attrs=attrs,
+        )
+
+    def save(self, path, n_modes=None, dtype=None, compress=True):
+        """
+        Write to NetCDF.
+
+        `n_modes` truncates. Ten modes typically carry 99% of the energy, so a
+        truncated file is a small fraction of the size. The full count is
+        recorded as `n_modes_computed` either way, so a later load() can tell
+        you a reconstruction will be approximate rather than letting you assume
+        otherwise -- see `truncated`.
+
+        `dtype="float32"` halves the file. The default float64 is what keeps
+        gram() an identity to 1e-15; float32 takes that to ~1e-7, which is fine
+        for plotting and not fine for verification.
+        """
+        ds = self.to_dataset(n_modes=n_modes, dtype=dtype)
+        encoding = ({v: {"zlib": True, "complevel": 4} for v in ds.data_vars}
+                    if compress else {})
+        ds.to_netcdf(path, encoding=encoding)
+        return path
+
+    @classmethod
+    def from_dataset(cls, ds: xr.Dataset) -> "PODResult":
+        return cls(
+            modes=np.asarray(ds["modes"].values),
+            energies=np.asarray(ds["energies"].values),
+            coefficients=np.asarray(ds["coefficients"].values),
+            mean_u=np.asarray(ds["mean_u"].values),
+            mean_v=np.asarray(ds["mean_v"].values),
+            x=np.asarray(ds["x"].values),
+            y=np.asarray(ds["y"].values),
+            V=np.asarray(ds["V"].values),
+            times=np.asarray(ds["time"].values),
+            meta=dict(ds.attrs),
+        )
+
+    @classmethod
+    def load(cls, path) -> "PODResult":
+        """Read a result written by save()."""
+        with xr.open_dataset(path) as ds:
+            return cls.from_dataset(ds.load())
+
+    @property
+    def truncated(self):
+        """True if fewer modes were saved than were originally computed."""
+        return int(self.meta.get("n_modes_computed", self.n_modes)) > self.n_modes
 
     def __repr__(self):
         f = self.energy_fraction()
@@ -208,6 +294,13 @@ def pod(dataset, times=None, n_modes=None, subtract_mean=True,
     modes = np.einsum("tcd,tk->kcd", Uv, Z) * scale[:, None, None]
     coeffs = Z * np.sqrt(n_t * lam)                # (n_t, keep)
 
+    meta = {k: ds.attrs[k] for k in
+            ("source_case", "length_scale", "frame_angle", "frame_origin")
+            if k in ds.attrs}
+    meta.update(subtract_mean=int(bool(subtract_mean)),
+                drop_initial=int(bool(drop_initial)),
+                n_times=int(n_t))
+
     return PODResult(
         modes=modes,
         energies=lam,
@@ -218,4 +311,5 @@ def pod(dataset, times=None, n_modes=None, subtract_mean=True,
         y=np.asarray(ds["y"].values),
         V=V,
         times=t,
+        meta=meta,
     )
