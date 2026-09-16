@@ -6,28 +6,232 @@ snapshots, interpolating scattered cell data onto a Cartesian grid, and
 advecting particles through the resulting velocity field (the groundwork for
 FTLE / LCS computation).
 
-> **Status: early research code.** The API is unstable, there are no tests, and
-> several rough edges is present. 
+> **Status: research code, usable but young.** 98 tests pass; FTLE is validated
+> against a uniform strain field to 3e-12 and against the double gyre. The API
+> still moves. Known gaps are tracked in `ISSUES.md`.
 
 ---
 
 ## Requirements
 
-- Python ≥ 3.10
+- **Python ≥ 3.10** (3.11+ preferred — `tomllib` is stdlib there; on 3.10 the
+  install pulls `tomli` instead)
 - [`fluidfoam`](https://fluidfoam.readthedocs.io) — reads OpenFOAM mesh/field files
 - `numpy`, `scipy`, `xarray`, `netCDF4`
-- `matplotlib` (only for the plotting scripts)
+- `matplotlib` for the plotting scripts (the `viz` extra)
+- **OpenFOAM** on `PATH` only if you need `postProcess` to write cell volumes
+  (see step 3). Reading an existing case needs no OpenFOAM install.
 
-## Installation
+---
+
+## Getting started
+
+### 1. Clone and install
 
 ```bash
-git clone <this-repo> flowkit
+git clone git@github.com:Imdadullah-Raji/flowkit.git
 cd flowkit
-python -m venv .venv && source .venv/bin/activate
-pip install -e .            # core
-pip install -e ".[viz]"     # + matplotlib for scripts/
 ```
 
+Then an environment. Either works — pick one:
+
+```bash
+# venv
+python3 -m venv .venv && source .venv/bin/activate
+
+# or conda, if your OpenFOAM python stack already lives there
+conda create -n flowkit python=3.12
+conda activate flowkit
+```
+
+Install editable, so your edits to `flowkit/` take effect without reinstalling:
+
+```bash
+pip install -e ".[viz,dev]"     # viz = matplotlib, dev = pytest + ruff
+pip install -e .                # core only
+```
+
+Verify — this must work from **any** directory, not just the repo root:
+
+```bash
+cd /tmp && python -c "import flowkit; print(flowkit.__version__, flowkit.__file__)"
+cd -    && pytest -q            # 98 passed
+```
+
+If `import flowkit` fails, the editable install did not take; re-run
+`pip install -e .` with the environment activated. You should never need
+`PYTHONPATH`.
+
+### 2. Point it at your data — `cases.toml`
+
+This is the step that is easy to skip and then puzzling. flowkit finds your
+simulations through a registry file at the repo root; nothing about your data
+is hardcoded in the package.
+
+```toml
+# cases.toml
+[defaults]
+patch = "airfoil"          # boundary patch used for the body length scale
+u_inf = [1.0, 0.0]         # freestream; sets the wake axis via Case.aoa
+
+[cases.my_case]
+path  = "/absolute/path/to/openfoam/case"
+u_inf = [0.866025404, 0.5]
+notes = "whatever you want to remember about it"
+```
+
+Keys: `path` (required), `patch`, `u_inf`, `nc`, `figures`, `notes`. An unknown
+key is an error rather than being silently ignored, so a typo'd `u_infinity`
+fails loudly instead of leaving `u_inf` at its default.
+
+Get `u_inf` from the case itself rather than typing `cos`/`sin` by hand:
+
+```bash
+grep -m1 internalField /path/to/case/0/U
+# internalField  uniform (0.866025404 0.500000000 0);
+```
+
+If `0/U` is `nonuniform` (a mapped or restarted IC), read the farfield BC
+instead: `strings 0/U | grep -A2 freestreamValue`.
+
+Check it loaded:
+
+```python
+from flowkit.cases import case, cases
+print(cases())                     # ['my_case']
+c = case("my_case")
+print(c.path, c.aoa, c.netcdf)
+```
+
+A useful sanity check if your case names encode the angle: confirm `c.aoa`
+matches the name. A copy-pasted `path` pointing at the wrong case is otherwise
+completely silent.
+
+### 3. Prepare the case — cell volumes
+
+POD needs cell volumes for its inner product (nothing else does). Write them
+once per case; the mesh is static, so a single copy in `constant/` is right:
+
+```bash
+cd /path/to/openfoam/case
+postProcess -func writeCellVolumes -latestTime
+mv <latestTime>/Vc constant/V
+```
+
+**`-latestTime` is not optional.** Without it OpenFOAM writes the field into
+*every* time directory — on a 1290-timestep case that is ~4 GB of duplicated
+data.
+
+### 4. Convert to NetCDF, once
+
+Reading an OpenFOAM case walks every time directory and parses every field.
+Do it once and cache:
+
+```python
+from flowkit.cases import case
+case("my_case").convert()          # -> <repo>/data/my_case.nc
+```
+
+Expect a few minutes and 1–3 GB for a 1000-timestep, 60k-cell 2-D case.
+Thereafter `case("my_case").dataset()` opens the cache lazily.
+
+### 5. First analysis
+
+```python
+import numpy as np
+from flowkit.cases import case
+from flowkit.pod import pod
+from flowkit import ftle
+
+c    = case("my_case")
+ds   = c.dataset()                                   # NetCDF + cell volumes
+wake = ds.rotate(c.aoa).crop_relative(-1, 9, -3, 3)  # chords, streamwise frame
+
+res = pod(wake)
+print(res.energy_fraction()[:4], res.n_modes_for(0.99))
+res.save(c.netcdf.with_name(f"pod_{c.name}.nc"), n_modes=20)
+
+x, y = np.arange(-1, 9, 0.02), np.arange(-3, 3, 0.02)
+f = ftle(wake, x, y, t0=float(wake.times[len(wake.times)//3]), T=4.0, dt=0.02)
+```
+
+`rotate()` before cropping matters whenever the wake is not aligned with x — an
+axis-aligned box around a 30° wake is mostly empty, and particles advecting into
+the empty corners are lost. See §6 of the quickstart.
+
+Working drivers to copy: `scripts/pod_aoa30.py` (single case, self-verifying),
+`scripts/pod_sweep.py` (every registered case), `scripts/ftle_aoa30.py`.
+
+### 6. Environment variables
+
+All optional; each overrides a repo-relative default.
+
+| | |
+|---|---|
+| `FLOWKIT_CASES` | path to the registry file (default `<repo>/cases.toml`) |
+| `FLOWKIT_DATA` | where NetCDF caches live (default `<repo>/data`) |
+| `FLOWKIT_FIGURES` | where `Case.figure()` writes (default `<repo>/figures`) |
+
+Useful when the same checkout runs on two machines with different data layouts:
+keep one `cases.toml` per machine and point `FLOWKIT_CASES` at the right one.
+
+### 7. Troubleshooting
+
+Errors you are likely to hit, and what they actually mean.
+
+**`ModuleNotFoundError: No module named 'flowkit'`**
+The editable install did not take, or the wrong environment is active. Re-run
+`pip install -e .`. Do not reach for `PYTHONPATH`.
+
+**`FileNotFoundError: No case file at <repo>/cases.toml`**
+Step 2. The message includes a minimal template.
+
+**`KeyError: Unknown case 'x'. Registered: [...]`**
+The name has no `[cases.x]` table. Note the table is `[cases.x]`, plural —
+`[case.x]` parses as an unrelated table and is silently ignored.
+
+**`MissingCellVolumes: Dataset has no 'V' cell coordinate`**
+Step 3. For a case already converted to NetCDF you do not need to reconvert:
+
+```python
+from flowkit.io import attach_volumes
+ds = Dataset(attach_volumes(ds.data, casepath), length_scale=ds.length_scale)
+```
+
+`Case.dataset()` does this for you.
+
+**`IndexError: index out of range` from `fluidfoam/readof.py`**
+Your `0/p` or `0/U` has a compact one-line header:
+
+```
+FoamFile { version 2.0; format ascii; class volScalarField; object p; }
+```
+
+fluidfoam's header parser needs `FoamFile` alone on a line, `{` alone on the
+next, and one `key value;` per line. Given the compact form it finds no header,
+decides the file is raw data, and fails confusingly further down. Expand it —
+`static_airfoil/edit.sh` does this in bulk, or by hand:
+
+```
+FoamFile
+{
+    version 2.0;
+    format ascii;
+    class volScalarField;
+    object p;
+}
+```
+
+**Results that look plausible but are wrong, on a moving-mesh case**
+If the case has `constant/dynamicMeshDict`, `read_foamcase` reads
+`constant/polyMesh` — the *undeflected* mesh — and attaches every field to the
+wrong coordinates without any error. Check before converting:
+
+```bash
+ls /path/to/case/constant/dynamicMeshDict 2>/dev/null && echo "MOVING MESH"
+```
+
+See `ISSUES.md` #33. Static cases are unaffected.
 
 ---
 
