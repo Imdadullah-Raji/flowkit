@@ -18,6 +18,94 @@
 patch = "airfoil"
 u_inf = [1.0, 0.0]
 
+# ---------------------------------------------------------------- static sweep
+# Generated from the case files themselves (0/U), not transcribed. Regenerate
+# rather than hand-editing u_inf: every hand-entered value in this file was
+# wrong in the last digit, and one was rounded to 6 dp.
+
+[cases.re500_aoa12]
+path  = "/home/raji/Research/Thesis/static_airfoil/re500_aoa12"
+u_inf = [0.978148, 0.207912]
+notes = """
+Static airfoil, Re=500, AoA=12. Static 2-D mesh, 63360 cells, chord 1.0.
+647 time dirs, 0..112.845 (t=0 is the IC; pod() drops it).
+u_inf read from the farfield freestreamValue.
+IC is a nonuniform mapped field rather than a fresh uniform one, so the
+freestream is not in internalField. The case file itself carries only 6 dp.
+"""
+
+[cases.re500_aoa14]
+path  = "/home/raji/Research/Thesis/static_airfoil/re500_aoa14"
+u_inf = [0.970295726, 0.241921896]
+notes = """
+Static airfoil, Re=500, AoA=14. Static 2-D mesh, 63360 cells, chord 1.0.
+643 time dirs, 0..93.3587 (t=0 is the IC; pod() drops it).
+u_inf read from 0/U internalField.
+"""
+
+[cases.re500_aoa16]
+path  = "/home/raji/Research/Thesis/static_airfoil/re500_aoa16"
+u_inf = [0.961261696, 0.275637356]
+notes = """
+Static airfoil, Re=500, AoA=16. Static 2-D mesh, 63360 cells, chord 1.0.
+647 time dirs, 0..94.6031 (t=0 is the IC; pod() drops it).
+u_inf read from 0/U internalField.
+"""
+
+[cases.re500_aoa18]
+path  = "/home/raji/Research/Thesis/static_airfoil/re500_aoa18"
+u_inf = [0.951056516, 0.309016994]
+notes = """
+Static airfoil, Re=500, AoA=18. Static 2-D mesh, 63360 cells, chord 1.0.
+645 time dirs, 0..96.2944 (t=0 is the IC; pod() drops it).
+u_inf read from 0/U internalField.
+"""
+
+[cases.re500_aoa20]
+path  = "/home/raji/Research/Thesis/static_airfoil/re500_aoa20"
+u_inf = [0.939692621, 0.342020143]
+notes = """
+Static airfoil, Re=500, AoA=20. Static 2-D mesh, 63360 cells, chord 1.0.
+1027 time dirs, 0..121.624 (t=0 is the IC; pod() drops it).
+u_inf read from 0/U internalField.
+"""
+
+[cases.re500_aoa22]
+path  = "/home/raji/Research/Thesis/static_airfoil/re500_aoa22"
+u_inf = [0.927183855, 0.374606593]
+notes = """
+Static airfoil, Re=500, AoA=22. Static 2-D mesh, 63360 cells, chord 1.0.
+646 time dirs, 0..122.903 (t=0 is the IC; pod() drops it).
+u_inf read from 0/U internalField.
+"""
+
+[cases.re500_aoa24]
+path  = "/home/raji/Research/Thesis/static_airfoil/re500_aoa24"
+u_inf = [0.913545458, 0.406736643]
+notes = """
+Static airfoil, Re=500, AoA=24. Static 2-D mesh, 63360 cells, chord 1.0.
+643 time dirs, 0..108.296 (t=0 is the IC; pod() drops it).
+u_inf read from 0/U internalField.
+"""
+
+[cases.re500_aoa26]
+path  = "/home/raji/Research/Thesis/static_airfoil/re500_aoa26"
+u_inf = [0.898794046, 0.438371147]
+notes = """
+Static airfoil, Re=500, AoA=26. Static 2-D mesh, 63360 cells, chord 1.0.
+1291 time dirs, 0..201.669 (t=0 is the IC; pod() drops it).
+u_inf read from 0/U internalField.
+"""
+
+[cases.re500_aoa28]
+path  = "/home/raji/Research/Thesis/static_airfoil/re500_aoa28"
+u_inf = [0.882947593, 0.469471563]
+notes = """
+Static airfoil, Re=500, AoA=28. Static 2-D mesh, 63360 cells, chord 1.0.
+1284 time dirs, 0..207.027 (t=0 is the IC; pod() drops it).
+u_inf read from 0/U internalField.
+"""
+
 [cases.re500_aoa30]
 path  = "/home/raji/Research/Thesis/static_airfoil/re500_aoa30"
 u_inf = [0.866025404, 0.5]
@@ -25,11 +113,13 @@ u_inf = [0.866025404, 0.5]
 # the file into <repo>/data/ (or point $FLOWKIT_DATA at its directory).
 nc    = "/home/raji/Research/analyze_cfd/data/re500_aoa30.nc"
 notes = """
-Static airfoil, Re=500, AoA=30. Static 2-D mesh, 63360 cells, chord 1.0,
-times 120.5-245.65 (plus a t=0 uniform IC that pod() drops). Sheds at St~0.319;
-POD modes arrive in pairs 22.7/22.0, 17.6/16.7, 8.0/7.9 %.
+Static airfoil, Re=500, AoA=30. Static 2-D mesh, 63360 cells, chord 1.0.
+1290 time dirs, 0..245.65 (t=0 is the IC; pod() drops it).
+u_inf read from 0/U internalField.
+POD: modes pair 22.7/22.0, 17.6/16.7, 8.0/7.9 %; sheds at St~0.319.
 """
 
+# ------------------------------------------------------------------ moving mesh
 [cases.step_input_aoa]
 path  = "/home/raji/Research/Thesis/step_input_aoa"
 notes = """
