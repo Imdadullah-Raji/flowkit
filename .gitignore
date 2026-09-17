@@ -28,3 +28,6 @@ ISSUES.md
 
 # Design note
 NOTE.md
+
+#egg-info
+*.egg-info
