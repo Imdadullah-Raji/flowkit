@@ -295,7 +295,9 @@ def pod(dataset, times=None, n_modes=None, subtract_mean=True,
     coeffs = Z * np.sqrt(n_t * lam)                # (n_t, keep)
 
     meta = {k: ds.attrs[k] for k in
-            ("source_case", "length_scale", "frame_angle", "frame_origin")
+            ("source_case", "length_scale", "frame_angle", "frame_origin",
+             "crop_bounds", "crop_relative", "crop_length_scale",
+             "crop_angle", "crop_origin")
             if k in ds.attrs}
     meta.update(subtract_mean=int(bool(subtract_mean)),
                 drop_initial=int(bool(drop_initial)),

@@ -64,15 +64,19 @@ class Dataset:
         """Restrict to an axis-aligned box. Every bound is optional."""
         mask = _bounds_mask(self._data['x'].values, self._data['y'].values,
                             xmin, xmax, ymin, ymax)
-        return self._with(self._data.isel(cell=mask))
+        return self._with(_record_crop(self._data.isel(cell=mask),
+                                       (xmin, xmax, ymin, ymax)))
 
     def crop_relative(self, xmin, xmax, ymin, ymax,
                       length_scale=None, origin=(0, 0)) -> "Dataset":
         """As crop, with bounds in multiples of the body length scale."""
         x0, y0 = origin
         L = self._length_scale_or_raise(length_scale)
-        return self.crop(xmin=x0 + xmin * L, xmax=x0 + xmax * L,
-                         ymin=y0 + ymin * L, ymax=y0 + ymax * L)
+        out = self.crop(xmin=x0 + xmin * L, xmax=x0 + xmax * L,
+                        ymin=y0 + ymin * L, ymax=y0 + ymax * L)
+        out._data.attrs['crop_relative'] = [xmin, xmax, ymin, ymax]
+        out._data.attrs['crop_length_scale'] = float(L)
+        return out
 
     def crop_rotated(self, xmin=None, xmax=None, ymin=None, ymax=None,
                      angle=0.0, origin=(0, 0), degrees=True) -> "Dataset":
@@ -87,16 +91,21 @@ class Dataset:
         mask = _rotated_bounds_mask(self._data['x'].values, self._data['y'].values,
                                     xmin, xmax, ymin, ymax,
                                     angle=angle, origin=origin, degrees=degrees)
-        return self._with(self._data.isel(cell=mask))
+        return self._with(_record_crop(self._data.isel(cell=mask),
+                                       (xmin, xmax, ymin, ymax),
+                                       angle=angle, origin=origin))
 
     def crop_rotated_relative(self, xmin, xmax, ymin, ymax, angle=0.0,
                               length_scale=None, origin=(0, 0),
                               degrees=True) -> "Dataset":
         """As crop_rotated, with bounds in multiples of the body length scale."""
         L = self._length_scale_or_raise(length_scale)
-        return self.crop_rotated(xmin=xmin * L, xmax=xmax * L,
-                                 ymin=ymin * L, ymax=ymax * L,
-                                 angle=angle, origin=origin, degrees=degrees)
+        out = self.crop_rotated(xmin=xmin * L, xmax=xmax * L,
+                                ymin=ymin * L, ymax=ymax * L,
+                                angle=angle, origin=origin, degrees=degrees)
+        out._data.attrs['crop_relative'] = [xmin, xmax, ymin, ymax]
+        out._data.attrs['crop_length_scale'] = float(L)
+        return out
 
     def rotate(self, angle, origin=(0, 0), degrees=True) -> "Dataset":
         """
@@ -412,6 +421,23 @@ def _bounds_mask(x, y, xmin=None, xmax=None, ymin=None, ymax=None):
     if ymax is not None:
         mask &= y <= ymax
     return mask
+
+
+def _record_crop(ds, bounds, angle=None, origin=None):
+    """
+    Note the requested box in the dataset attrs.
+
+    rotate() already records its frame; without this a saved crop could only be
+    inferred from the surviving x/y range, which loses whether the box was given
+    in chords or in absolute units.
+    """
+    ds = ds.copy()
+    ds.attrs['crop_bounds'] = [(-np.inf if b is None else float(b)) for b in bounds]
+    if angle is not None:
+        ds.attrs['crop_angle'] = float(angle)
+    if origin is not None:
+        ds.attrs['crop_origin'] = tuple(origin)
+    return ds
 
 
 def _rotate(x, y, angle, origin=(0, 0), degrees=True):
